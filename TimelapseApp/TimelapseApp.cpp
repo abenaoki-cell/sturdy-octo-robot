@@ -88,6 +88,18 @@ void TimelapseApp::startCapture() {
         return;
     }
 
+    // タイムスタンプ付きディレクトリを生成
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
+    saveDirectory = QDir::toNativeSeparators(saveDirectory + "/" + timestamp);
+
+    QDir dir(saveDirectory);
+    if (!dir.exists()) {
+        if (!dir.mkpath(saveDirectory)) {
+            QMessageBox::critical(this, "Error", "Failed to create directory: " + saveDirectory);
+            return;
+        }
+    }
+
     camera.set(cv::CAP_PROP_FRAME_WIDTH, imageWidth);
     camera.set(cv::CAP_PROP_FRAME_HEIGHT, imageHeight);
 
@@ -95,6 +107,7 @@ void TimelapseApp::startCapture() {
     captureTimer->start(captureInterval);
     statusLabel->setText("Status: Capturing...");
 }
+
 
 void TimelapseApp::stopCapture() {
     capturing = false;
@@ -117,39 +130,28 @@ void TimelapseApp::captureImage() {
 }
 
 void TimelapseApp::saveImage(const cv::Mat &frame, const QString &filePath) {
-    // ファイルパスが空でないか確認
-    if (filePath.isEmpty()) {
-        QMessageBox::critical(this, "Error", "Save directory is not set or invalid.");
-        return;
-    }
+    QString nativeFilePath = QDir::toNativeSeparators(filePath);
 
-    // ディレクトリが存在するか確認
-    QString directoryPath = QFileInfo(filePath).absolutePath();
-    QDir dir(directoryPath);
-    if (!dir.exists()) {
-        QMessageBox::critical(this, "Error", "The selected directory does not exist.");
-        return;
-    }
-
-    // 書き込み権限を確認（仮のファイルを作成してテスト）
-    QTemporaryFile testFile(directoryPath + "/testXXXXXX");
-    if (!testFile.open()) {
-        QMessageBox::critical(this, "Error", "The selected directory is not writable.");
-        return;
-    }
-    testFile.close();
-
-    // OpenCVで保存
+    // OpenCVで画像をエンコード
+    std::vector<uchar> buffer;
     std::vector<int> params;
     if (imageFormat == "JPG") params = {cv::IMWRITE_JPEG_QUALITY, 95};
     if (imageFormat == "PNG") params = {cv::IMWRITE_PNG_COMPRESSION, 3};
 
-    std::string utf8Path = filePath.toUtf8().constData();
-    if (!cv::imwrite(utf8Path, frame, params)) {
-        QMessageBox::critical(this, "Error", "Failed to save image to: " + filePath);
+    std::string ext = "." + imageFormat.toLower().toStdString();
+    if (!cv::imencode(ext, frame, buffer, params)) {
+        QMessageBox::critical(this, "Error", "Failed to encode image.");
         return;
     }
 
-    // 成功時のステータス
-    statusLabel->setText("Image saved to: " + filePath);
+    // QFileで保存
+    QFile file(nativeFilePath);
+    if (!file.open(QIODevice::WriteOnly)) {
+        QMessageBox::critical(this, "Error", "Cannot write to: " + nativeFilePath);
+        return;
+    }
+    file.write(reinterpret_cast<const char*>(buffer.data()), buffer.size());
+    file.close();
+
+    statusLabel->setText("Image saved to: " + nativeFilePath);
 }
